@@ -2,7 +2,7 @@
 FROM python:3.9-slim
 
 # Устанавливаем рабочую директорию
-WORKDIR /app/tg-claude-bot
+WORKDIR /app/tg-news-bot
 
 # Копируем файл зависимостей и устанавливаем их
 COPY requirements.txt .

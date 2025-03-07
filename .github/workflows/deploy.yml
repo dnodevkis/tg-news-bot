@@ -1,0 +1,39 @@
+name: Deploy Telegram Bot
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v0.1.2
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script: |
+            cd /home/dekant/app/tg-news-bot
+            echo "Updating .env file..."
+            echo "BOT_TOKEN=${{ secrets.BOT_TOKEN }}" > .env
+            echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" >> .env
+            echo "CLAUDE_MODEL=${{ secrets.CLAUDE_MODEL }}" >> .env
+            echo "ADMIN_ID=${{ secrets.ADMIN_ID }}" >> .env
+            echo "CHANNEL_ID=${{ secrets.CHANNEL_ID }}" >> .env
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+            echo "Pulling latest code from Git..."
+            git pull origin main
+            echo "Stopping existing containers..."
+            docker-compose down
+            echo "Rebuilding containers (no-cache)..."
+            docker-compose build --no-cache
+            echo "Starting containers in detached mode..."
+            docker-compose up -d

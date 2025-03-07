@@ -1,9 +1,43 @@
-version: '3'
+version: "3"
 services:
-  tg-claude-bot:
+  db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mydb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+
+  # Опционально можно добавить сервис для Python‑бота,
+  bot:
     build: .
     environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=mydb
+      - DB_USER=admin
+      - DB_PASSWORD=password
       - BOT_TOKEN=${BOT_TOKEN}
       - CLAUDE_API_KEY=${CLAUDE_API_KEY}
       - CLAUDE_MODEL=${CLAUDE_MODEL}
-    restart: always
+      - ADMIN_ID = ${ADMIN_ID}
+      - CHANNEL_ID = ${CHANNEL_ID}
+      - OPENAI_API_KEY = ${OPENAI_API_KEY}
+
+    depends_on:
+      - db
+    networks:
+      - app_network
+
+volumes:
+  postgres_data:
+
+networks:
+  app_network:
+    name: app_network

@@ -2,114 +2,308 @@ import os
 import json
 import logging
 import requests
+import openai  # Библиотека для работы с OpenAI API (DALL-E)
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 # Загружаем переменные окружения из файла .env
 load_dotenv()
 
 # Настройка логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.DEBUG  # Для отладки; в продакшене можно сменить на INFO
+)
 logger = logging.getLogger(__name__)
 
-# Получение переменных окружения
+# Константы из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@Echo_of_Langinion")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-7-sonnet-20250219")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Системная инструкция для Claude
-SYSTEM_INSTRUCTION = "Ты должен ответить на следующий запрос максимально подробно и понятно."
+# Настраиваем OpenAI
+openai.api_key = OPENAI_API_KEY
 
-# Глобальный кэш для хранения контекста диалога для каждого пользователя
-# Для каждого chat_id будем хранить список последних сообщений (до 5 сообщений: сообщения пользователя и ответы ассистента)
-user_context = {}
+# Загрузка системного промта из отдельного файла
+with open("system_prompt.txt", "r", encoding="utf-8") as f:
+    SYSTEM_PROMPT = f.read()
 
-def start(update: Update, context: CallbackContext):
-    """Обработчик команды /start."""
-    update.message.reply_text("Привет! Отправь сообщение, и я передам его в API Claude. Используй /reset для сброса контекста.")
+# --- Заглушка "База данных" ---
+# Имитируем таблицу EventReports (новостные заметки)
+event_reports = [
+    {
+        "id": 1,
+        "group_id": "A",
+        "report": "Проснувшись в трактире, и почувствовав ряд изменений в своих магических ощущениях, приключенцы поспешили в пещеру, карту, которой прикупил Шаль накануне. По дороге они встретили Эльмиру, у которой Эмма узнала про чудесный цветок, способный излечить ее зрение. При выходе из городских ворот, чародейки помогли работягам, жаловавшимся на плохие кирки и отсутствие кузнеца, растопить лед, сковавший городскую стену. Чтобы лишний раз не рисковать, Аваслава отправила Сову на разведку. Та принесла весть, что пещера мало походит на то, что описывал торговец. Ощущение, что это древняя дворфийская обустроенная пещера. По крайней мере на ее входе стоит красивая дверь дворфийской ковки и защищенная рунами. А еще сова увидела там гигантскую змею, нависавшую над проходом. Набравшись храбрости, команда отправилась на вход. Змея к тому моменту куда-то уползла, а вот дверь таила в себе загадку: "Лишь только пожертвовав рукой, можно было войти внутрь", — гласила надпись на двери. Пока искали, чем можно заменить руку, Шаль обрубил корни дерева, где притаилась змея. Так получилось, что совершенно случайно та стала жертвой его острого меча. Эфросима с помощью своего магического кольца превратилась в пчелку и посмотрела механизм ловушки на двери. Она поняла, что ловушка не сконструирована для отрубания руки и Шаль решился на жертву. Он вставил руку, дверь начала отворяться и потащила его за собой. Остальные поторопились войти следом. Потом дверь стала закрываться, а ловушка ослабевать. Шаль ловко вывернул руку и в последний момент просочился в пещеру через закрывающуюся дверь.",
+        "created_at": "2025-03-01T12:00:00",
+        "isPosted": None
+    },
+    {
+        "id": 2,
+        "group_id": "A",
+        "report": "Девушки наконец-то дошли до города Иворанд, по крайней мере так было написано на старом пошарпанном столбе. При входе в город была огромная глыба льда, которую горожане разбивали полусломанными кирками, ругаясь, что не могут получить нормальный инструмент, потому что кузнец куда-то запропастился. Войдя в город, дамы обнаружили прекрасную рыночную площадь, на которой стоял не менее прекрасный воин. Он о чем-то тихо беседовал с торговцем артефактами. Во время знакомства раздался мощный взрыв. Пламя охватило внушительный старый особняк и началась суматоха. Чернокнижницы отправились на помощь. Потушив пожар, они стали выяснять, в чем дело. Оказывается, Эльмира, глава местного филиала гильдии магов, вела обычную лекцию и показывала действие стихийного снаряда. Но что-то пошло не так. Магия будто взбесилась и стала на мгновение бесконтрольной. Эльмира пообещала, что хорошо вознаградит приключенцев, если они помогут убрать последствия взрыва.",
+        "created_at": "2025-03-02T13:00:00",
+        "isPosted": None
+    }
+                ]
 
-def reset_context(update: Update, context: CallbackContext):
-    """Сброс контекста диалога для данного пользователя."""
-    chat_id = update.message.chat_id
-    if chat_id in user_context:
-        del user_context[chat_id]
-    update.message.reply_text("Контекст диалога сброшен.")
+def get_unposted_news_groups():
+    """
+    Группирует новости с isPosted == None по group_id и оставляет последние 3 записи по дате.
+    Если поле "created_at" отсутствует, используется пустая строка.
+    Возвращает словарь: { group_id: [news, ...] }
+    """
+    groups = {}
+    for report in event_reports:
+        if report.get("isPosted") is None:
+            group_id = report.get("group_id")
+            groups.setdefault(group_id, []).append(report)
+    for group_id, reports in groups.items():
+        reports.sort(key=lambda r: r.get("created_at", ""))
+        groups[group_id] = reports[-3:]
+    return groups
 
-def handle_message(update: Update, context: CallbackContext):
-    """Обрабатывает входящие сообщения, сохраняет контекст и отправляет запрос к API Claude."""
-    user_text = update.message.text
-    if not user_text:
-        return
+def update_news_status(group_id, status):
+    """
+    Обновляет поле isPosted для всех новостей с данным group_id,
+    где isPosted пока None.
+    status: True (одобрено), False (отменено)
+    """
+    for report in event_reports:
+        if report.get("group_id") == group_id and report.get("isPosted") is None:
+            report["isPosted"] = status
 
-    chat_id = update.message.chat_id
-
-    # Инициализируем контекст для пользователя, если его нет
-    if chat_id not in user_context:
-        user_context[chat_id] = []
-
-    # Добавляем новое сообщение пользователя в контекст
-    user_context[chat_id].append({"role": "user", "content": user_text})
-    # Ограничиваем контекст: оставляем только последние 5 сообщений
-    if len(user_context[chat_id]) > 5:
-        user_context[chat_id] = user_context[chat_id][-5:]
-
-    # Формируем payload для API Claude
+def call_editor_api(news_group):
+    """
+    Вызывает API Claude для генерации поста.
+    Формирует текст запроса на основе новостных заметок и системного промта.
+    Возвращает словарь с результатом, либо None при ошибке.
+    """
+    news_text = "\n".join([r["report"] for r in news_group])
+    prompt = f"Набор новостных заметок:\n{news_text}\n\nПреобразуй их согласно описанию:\n{SYSTEM_PROMPT}"
+    
     payload = {
         "model": CLAUDE_MODEL,
-        "max_tokens": 2000,
-        "system": SYSTEM_INSTRUCTION,
-        "messages": user_context[chat_id]
+        "max_tokens": 4000,
+        "system": SYSTEM_PROMPT,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ]
     }
-
     headers = {
         "Content-Type": "application/json",
         "x-api-key": CLAUDE_API_KEY,
         "anthropic-version": "2023-06-01"
     }
-
+    
+    logger.debug("Отправляем payload:\n%s", json.dumps(payload, indent=2, ensure_ascii=False))
+    
     try:
-        # Отправляем запрос на рабочий эндпоинт /v1/messages
         response = requests.post("https://api.anthropic.com/v1/messages",
-                                 json=payload, headers=headers, timeout=10)
+                                 json=payload, headers=headers, timeout=20)
         response.raise_for_status()
+        raw_response = response.text
+        logger.debug("Сырой ответ от API:\n%s", raw_response)
+        
         data = response.json()
-
-        # Извлекаем текст ответа (в рабочем варианте API возвращает ответ в поле content)
-        if "content" in data and isinstance(data["content"], list) and len(data["content"]) > 0:
-            reply_text = data["content"][0].get("text", "")
+        if "content" in data and isinstance(data["content"], list) and data["content"]:
+            reply = data["content"][0].get("text", "")
         elif "completion" in data:
-            reply_text = data["completion"]
+            reply = data["completion"]
         else:
-            reply_text = json.dumps(data)
+            reply = ""
+        logger.debug("Извлечённый ответ:\n%s", reply)
+        
+        def clean_reply(text):
+            text = text.strip()
+            if text.startswith("```json"):
+                text = text[len("```json"):].strip()
+            if text.endswith("```"):
+                text = text[:-3].strip()
+            return text
+        
+        cleaned_reply = clean_reply(reply)
+        logger.debug("Очищенный ответ для парсинга:\n%s", cleaned_reply)
+        
+        try:
+            result = json.loads(cleaned_reply)
+            logger.debug("Распарсенный результат:\n%s", json.dumps(result, indent=2, ensure_ascii=False))
+            return result
+        except Exception as e:
+            logger.error("Ошибка парсинга ответа редактора: %s", e)
+            logger.error("Сырой ответ после очистки: %s", cleaned_reply)
+            return None
+    except requests.RequestException as e:
+        logger.error("Ошибка вызова API редактора: %s", e)
+        return None
 
-        # Добавляем ответ ассистента в контекст
-        user_context[chat_id].append({"role": "assistant", "content": reply_text})
-        if len(user_context[chat_id]) > 10:
-            user_context[chat_id] = user_context[chat_id][-10:]
+def generate_image(prompt):
+    """
+    Генерирует изображение с помощью OpenAI DALL-E (DALL-E 3) по заданному промту.
+    Возвращает URL изображения или None при ошибке.
+    """
+    try:
+        response = openai.images.generate(
+            prompt=prompt,
+            model="dall-e-3", 
+            n=1,
+            size="1024x1024",  # Возможные размеры: "256x256", "512x512", "1024x1024"
+            response_format="url",
+            quality="hd" 
+        )
+        image_url = response.data[0].url
+        logger.debug("Сгенерированное изображение: %s", image_url)
+        return image_url
+    except Exception as e:
+        logger.error("Ошибка генерации изображения: %s", e)
+        return None
 
-        update.message.reply_text(reply_text)
+# --- Handlers бота ---
 
-    except requests.exceptions.RequestException as e:
-        logger.error("Ошибка при запросе к API Claude: %s", e)
-        update.message.reply_text("Произошла ошибка при обращении к API Claude. Попробуйте позже.")
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Привет! Используйте команду /checknews для проверки новостей.")
+
+def check_news(update: Update, context: CallbackContext):
+    groups = get_unposted_news_groups()
+    if not groups:
+        update.message.reply_text("Новых новостей нет.")
+        return
+    
+    for group_id, news_group in groups.items():
+        result = call_editor_api(news_group)
+        if result is None:
+            update.message.reply_text(f"Не удалось обработать новости группы {group_id}.")
+            continue
+        
+        post = result.get("post", {})
+        illustration_prompt = post.get("illustration", "")
+        image_url = generate_image(illustration_prompt)
+        
+        context.chat_data[f"group_{group_id}"] = {
+            "news_group": news_group,
+            "editor_result": result,
+            "image_url": image_url
+        }
+        
+        if result.get("resolution") == "approve":
+            title = post.get("title", "Без заголовка")
+            body = post.get("body", "")
+            message_text = f"{title}\n\n{body}"
+            keyboard = [
+                [
+                    InlineKeyboardButton("Принять", callback_data=f"approve:{group_id}"),
+                    InlineKeyboardButton("Ещё раз", callback_data=f"again:{group_id}")
+                ],
+                [
+                    InlineKeyboardButton("Картинка", callback_data=f"image:{group_id}"),
+                    InlineKeyboardButton("Отмена", callback_data=f"cancel:{group_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            if image_url:
+                context.bot.send_photo(chat_id=ADMIN_ID, photo=image_url, caption=message_text, reply_markup=reply_markup)
+            else:
+                context.bot.send_message(chat_id=ADMIN_ID, text=message_text, reply_markup=reply_markup)
+        else:
+            update.message.reply_text(f"Новости группы {group_id} отклонены редактором.")
+            update_news_status(group_id, False)
+
+def button_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    query.answer()
+    data = query.data  # Формат: "approve:GROUP", "again:GROUP", "cancel:GROUP", "image:GROUP"
+    action, group_id = data.split(":")
+    
+    group_data = context.chat_data.get(f"group_{group_id}")
+    if not group_data:
+        query.edit_message_text("Данные группы не найдены.")
+        return
+    news_group = group_data["news_group"]
+    
+    if action == "approve":
+        update_news_status(group_id, True)
+        post = group_data["editor_result"].get("post", {})
+        title = post.get("title", "Без заголовка")
+        body = post.get("body", "")
+        message_text = f"{title}\n\n{body}"
+        image_url = group_data.get("image_url")
+        if image_url:
+            context.bot.send_photo(chat_id=CHANNEL_ID, photo=image_url, caption=message_text)
+        else:
+            context.bot.send_message(chat_id=CHANNEL_ID, text=message_text)
+        query.edit_message_text("Пост опубликован.")
+        
+    elif action == "again":
+        result = call_editor_api(news_group)
+        if result is None:
+            query.edit_message_text("Ошибка при повторной генерации.")
+            return
+        group_data["editor_result"] = result
+        post = result.get("post", {})
+        title = post.get("title", "Без заголовка")
+        body = post.get("body", "")
+        illustration_prompt = post.get("illustration", "")
+        message_text = f"{title}\n\n{body}"
+        new_image_url = generate_image(illustration_prompt)
+        group_data["image_url"] = new_image_url
+        keyboard = [
+            [
+                InlineKeyboardButton("Принять", callback_data=f"approve:{group_id}"),
+                InlineKeyboardButton("Ещё раз", callback_data=f"again:{group_id}")
+            ],
+            [
+                InlineKeyboardButton("Картинка", callback_data=f"image:{group_id}"),
+                InlineKeyboardButton("Отмена", callback_data=f"cancel:{group_id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        try:
+            context.bot.edit_message_media(
+                chat_id=ADMIN_ID,
+                message_id=query.message.message_id,
+                media=InputMediaPhoto(media=new_image_url, caption=message_text)
+            )
+        except Exception as e:
+            logger.error("Ошибка редактирования медиа сообщения: %s", e)
+            context.bot.send_photo(chat_id=ADMIN_ID, photo=new_image_url, caption=message_text, reply_markup=reply_markup)
+            
+    elif action == "image":
+        post = group_data["editor_result"].get("post", {})
+        illustration_prompt = post.get("illustration", "")
+        new_image_url = generate_image(illustration_prompt)
+        if new_image_url:
+            group_data["image_url"] = new_image_url
+            try:
+                context.bot.edit_message_media(
+                    chat_id=ADMIN_ID,
+                    message_id=query.message.message_id,
+                    media=InputMediaPhoto(media=new_image_url, caption=query.message.caption)
+                )
+            except Exception as e:
+                logger.error("Ошибка редактирования медиа сообщения: %s", e)
+                context.bot.send_photo(chat_id=ADMIN_ID, photo=new_image_url, caption=query.message.caption, reply_markup=query.message.reply_markup)
+            query.answer("Изображение обновлено.")
+        else:
+            query.answer("Ошибка генерации изображения.")
+            
+    elif action == "cancel":
+        update_news_status(group_id, False)
+        query.edit_message_text("Сценарий отменён.")
 
 def main():
-    """Запуск бота."""
-    if not BOT_TOKEN or not CLAUDE_API_KEY:
-        logger.error("Не заданы BOT_TOKEN или CLAUDE_API_KEY в переменных окружения.")
-        return
-
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("reset", reset_context))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
+    dp.add_handler(CommandHandler("checknews", check_news))
+    dp.add_handler(CallbackQueryHandler(button_handler))
+    
     updater.start_polling()
-    logger.info("Бот запущен и ожидает сообщений.")
     updater.idle()
 
 if __name__ == '__main__':
