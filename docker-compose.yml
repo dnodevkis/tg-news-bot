@@ -32,6 +32,24 @@ services:
       - db
     networks:
       - app_network
+    volumes:
+      - ./fetched-events:/app/fetched-events
+
+  upsert:
+    build: .
+    command: ["python", "upsert_monitor.py"]
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=mydb
+      - DB_USER=admin
+      - DB_PASSWORD=password
+    depends_on:
+      - db
+    networks:
+      - app_network
+    volumes:
+      - ./fetched-events:/app/fetched-events
 
 volumes:
   postgres_data:
