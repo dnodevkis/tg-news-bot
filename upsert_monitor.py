@@ -77,7 +77,7 @@ def process_file(conn, filepath):
             content = f.read()
         logger.debug("Длина файла %s: %d символов", filepath, len(content))
         # Можно временно вывести первые 300 символов для отладки:
-        logger.debug("Начало содержимого файла: %s", content[:300])
+        logger.debug("Начало содержимого файла: %s", content)
         data = json.loads(content)
         if isinstance(data, list):
             logger.debug("Найдено %d записей в файле.", len(data))
