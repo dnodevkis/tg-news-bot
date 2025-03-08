@@ -23,8 +23,8 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
 
 # Каталог для мониторинга файлов с записями
 MONITOR_DIR = "/app/fetched-events"
-# Интервал опроса (600 секунд = 10 минут)
-POLL_INTERVAL = 600
+# Интервал опроса (300 секунд = 10 минут)
+POLL_INTERVAL = 300
 
 def create_table(conn):
     logger.info("Проверяем наличие таблицы fetched_events...")
