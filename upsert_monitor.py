@@ -74,7 +74,11 @@ def process_file(conn, filepath):
     logger.info("Начало обработки файла: %s", filepath)
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+            content = f.read()
+        logger.debug("Длина файла %s: %d символов", filepath, len(content))
+        # Можно временно вывести первые 300 символов для отладки:
+        logger.debug("Начало содержимого файла: %s", content[:300])
+        data = json.loads(content)
         if isinstance(data, list):
             logger.debug("Найдено %d записей в файле.", len(data))
             upsert_records(conn, data)
