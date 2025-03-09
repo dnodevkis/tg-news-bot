@@ -225,8 +225,8 @@ def start(update: Update, context: CallbackContext):
 
 def check_news(update: Update, context: CallbackContext):
     groups = get_unposted_news_groups()
+    # Если новостей нет, функция завершается без отправки сообщения
     if not groups:
-        update.message.reply_text("Новых новостей нет.")
         return
     # Проходим по группам новостей (каждая группа – это набор до 3 новостей, объединённых по groupId)
     for group_id, news_group in groups.items():
