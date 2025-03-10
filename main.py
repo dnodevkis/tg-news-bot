@@ -275,7 +275,10 @@ def select_time(update: Update, context: CallbackContext):
     query.answer()
     
     if query.data == "cancel_scheduling":
-        query.edit_message_reply_markup(None)
+        if query.message.text:
+            query.edit_message_reply_markup(None)
+        elif query.message.caption:
+            query.edit_message_reply_markup(None)
         return ConversationHandler.END
     
     # Extract selected time
@@ -313,7 +316,10 @@ def confirm_schedule(update: Update, context: CallbackContext):
     time_str = context.user_data.get('scheduled_time')
     
     if not group_id or not time_str:
-        query.edit_message_text("Ошибка планирования. Пожалуйста, попробуйте снова.")
+        if query.message.text:
+            query.edit_message_text("Ошибка планирования. Пожалуйста, попробуйте снова.")
+        elif query.message.caption:
+            query.edit_message_caption("Ошибка планирования. Пожалуйста, попробуйте снова.")
         return ConversationHandler.END
     
     try:
@@ -323,7 +329,10 @@ def confirm_schedule(update: Update, context: CallbackContext):
         # Get post data
         group_data = context.chat_data.get(f"group_{group_id}")
         if not group_data:
-            query.edit_message_text("Данные поста не найдены. Пожалуйста, попробуйте снова.")
+            if query.message.text:
+                query.edit_message_text("Данные поста не найдены. Пожалуйста, попробуйте снова.")
+            elif query.message.caption:
+                query.edit_message_caption("Данные поста не найдены. Пожалуйста, попробуйте снова.")
             return ConversationHandler.END
         
         post = group_data["editor_result"].get("post", {})
@@ -352,16 +361,24 @@ def confirm_schedule(update: Update, context: CallbackContext):
             name=f"scheduled_{group_id}"
         )
         
-        query.edit_message_text(
-            f"✅ Публикация запланирована на {time_str}.\n\n{title}"
-        )
+        if query.message.text:
+            query.edit_message_text(
+                f"✅ Публикация запланирована на {time_str}.\n\n{title}"
+            )
+        elif query.message.caption:
+            query.edit_message_caption(
+                caption=f"✅ Публикация запланирована на {time_str}.\n\n{title}"
+            )
         
         # Cleanup
         context.user_data.clear()
         
     except Exception as e:
         logger.error(f"Ошибка при планировании публикации: {e}")
-        query.edit_message_text(f"Ошибка при планировании публикации: {str(e)}")
+        if query.message.text:
+            query.edit_message_text(f"Ошибка при планировании публикации: {str(e)}")
+        elif query.message.caption:
+            query.edit_message_caption(f"Ошибка при планировании публикации: {str(e)}")
     
     return ConversationHandler.END
 
@@ -507,7 +524,6 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
                 text=f"❌ Ошибка при обработке группы {group_id}: {str(e)}"
             )
 
-
 # --- Button callbacks ---
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -555,10 +571,10 @@ def button_handler(update: Update, context: CallbackContext):
                 )
             query.edit_message_reply_markup(None)
             context.bot.send_message(
-    chat_id=query.message.chat_id,
-    text="✅ Пост опубликован!",
-    reply_to_message_id=query.message.message_id
-)
+                chat_id=query.message.chat_id,
+                text="✅ Пост опубликован!",
+                reply_to_message_id=query.message.message_id
+            )
             logger.info(f"Группа {group_id} опубликована.")
         except Exception as e:
             logger.error(f"Ошибка при публикации поста: {e}")
@@ -568,10 +584,10 @@ def button_handler(update: Update, context: CallbackContext):
         update_news_status_by_group(group_id, False)
         query.edit_message_reply_markup(None)
         context.bot.send_message(
-    chat_id=query.message.chat_id,
-    text="❌ Пост отклонен.",
-    reply_to_message_id=query.message.message_id
-)
+            chat_id=query.message.chat_id,
+            text="❌ Пост отклонен.",
+            reply_to_message_id=query.message.message_id
+        )
         logger.info(f"Группа {group_id} отклонена.")
 
     elif action == "again":
