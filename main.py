@@ -322,18 +322,18 @@ def confirm_schedule(update: Update, context: CallbackContext):
             query.edit_message_caption("Ошибка планирования. Пожалуйста, попробуйте снова.")
         return ConversationHandler.END
     
+    # Извлекаем данные поста из bot_data, а не chat_data
+    group_data = context.bot_data.get("news_groups", {}).get(f"group_{group_id}")
+    if not group_data:
+        if query.message.text:
+            query.edit_message_text("Данные поста не найдены. Пожалуйста, попробуйте снова.")
+        elif query.message.caption:
+            query.edit_message_caption("Данные поста не найдены. Пожалуйста, попробуйте снова.")
+        return ConversationHandler.END
+    
     try:
         # Parse time string
         scheduled_time = datetime.strptime(time_str, '%d.%m.%Y %H:%M')
-        
-        # Get post data
-        group_data = context.chat_data.get(f"group_{group_id}")
-        if not group_data:
-            if query.message.text:
-                query.edit_message_text("Данные поста не найдены. Пожалуйста, попробуйте снова.")
-            elif query.message.caption:
-                query.edit_message_caption("Данные поста не найдены. Пожалуйста, попробуйте снова.")
-            return ConversationHandler.END
         
         post = group_data["editor_result"].get("post", {})
         title = post.get("title", "Без заголовка")
