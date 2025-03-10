@@ -223,44 +223,36 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
     """
     Обрабатывает группы новостей.
     Если send_loading_msg=True, то используется update_obj для отправки/редактирования сообщения с состоянием загрузки.
+    Перед началом обработки каждой группы отправляется сообщение "Генерирую, в очереди n постов",
+    которое по завершении обработки заменяется постом новости.
     """
-    # Если команда вызвана напрямую, показываем сообщение "проверяю..."
-    tmp_msg = None
-    if send_loading_msg and update_obj:
-        tmp_msg = update_obj.message.reply_text("проверяю...")
-
-    if not groups:
-        if tmp_msg:
-            tmp_msg.edit_text("новостей нет")
-        return
-
-    # Подсчитываем общее число новостей в очереди
-    queue_count = sum(len(news_list) for news_list in groups.values())
-    if tmp_msg:
-        tmp_msg.edit_text(f"Генерирую, в очереди {queue_count} постов")
-
-    # Обрабатываем каждую группу новостей
-    for group_id, news_group in groups.items():
+    group_ids = list(groups.keys())
+    total_groups = len(group_ids)
+    
+    for i, group_id in enumerate(group_ids):
+        remaining = total_groups - i  # количество групп, которые еще предстоит обработать
+        
+        # Отправляем сообщение с информацией о количестве оставшихся постов
+        status_msg = context.bot.send_message(chat_id=ADMIN_ID, text=f"Генерирую, в очереди {remaining} постов")
+        
+        news_group = groups[group_id]
         result = call_editor_api(news_group)
         if result is None:
-            if send_loading_msg and update_obj:
-                update_obj.message.reply_text(f"Не удалось обработать новости группы {group_id}.")
-            else:
-                context.bot.send_message(chat_id=ADMIN_ID, text=f"Не удалось обработать новости группы {group_id}.")
+            status_msg.edit_text(f"Не удалось обработать новости группы {group_id}.")
             continue
 
         # Генерируем изображение, если предусмотрено в ответе
         post = result.get("post", {})
         illustration_prompt = post.get("illustration", "")
         image_url = generate_image(illustration_prompt)
-
-        # Сохраняем данные группы для дальнейшей обработки
+        
+        # Сохраняем данные группы для дальнейшей обработки (например, для кнопок)
         context.chat_data[f"group_{group_id}"] = {
             "news_group": news_group,
             "editor_result": result,
             "image_url": image_url
         }
-
+        
         if result.get("resolution") == "approve":
             title = post.get("title", "Без заголовка")
             body = post.get("body", "")
@@ -276,17 +268,23 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
+            # Редактируем сообщение с информацией, заменяя его на пост новости
             if image_url:
-                context.bot.send_photo(chat_id=ADMIN_ID, photo=image_url, caption=message_text, reply_markup=reply_markup)
+                try:
+                    context.bot.edit_message_media(
+                        chat_id=ADMIN_ID,
+                        message_id=status_msg.message_id,
+                        media=InputMediaPhoto(media=image_url, caption=message_text),
+                        reply_markup=reply_markup
+                    )
+                except Exception as e:
+                    logger.error("Ошибка редактирования медиа сообщения: %s", e)
+                    context.bot.send_photo(chat_id=ADMIN_ID, photo=image_url, caption=message_text, reply_markup=reply_markup)
             else:
-                context.bot.send_message(chat_id=ADMIN_ID, text=message_text, reply_markup=reply_markup)
+                status_msg.edit_text(message_text, reply_markup=reply_markup)
         else:
-            if send_loading_msg and update_obj:
-                update_obj.message.reply_text(f"Новости группы {group_id} отклонены редактором.")
-            else:
-                context.bot.send_message(chat_id=ADMIN_ID, text=f"Новости группы {group_id} отклонены редактором.")
+            status_msg.edit_text(f"Новости группы {group_id} отклонены редактором.")
             update_news_status_by_group(group_id, False)
-
 # --- Handlers бота ---
 
 def start(update: Update, context: CallbackContext):
