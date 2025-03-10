@@ -393,35 +393,21 @@ def post_scheduled_content(context: CallbackContext):
 # --- News processing ---
 def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool = False, update_obj: Update = None):
     """
-    Обрабатывает группы новостей, генерирует контент и подготавливает данные для модерации.
-    Для каждой группы перед началом обработки отправляется сообщение "Генерирую, в очереди n постов",
-    которое после обработки удаляется, а затем отправляется новое сообщение с результатом (пост новости или сообщение об ошибке).
-
-    Если context.chat_data отсутствует (равен None), используется временный словарь, и выводится предупреждение.
-    
-    Args:
-        groups: Словарь групп новостей.
-        context: CallbackContext Telegram.
-        send_loading_msg: Если True, сообщения отправляются через update_obj.
-        update_obj: Объект Update, если вызывается ручная команда.
+    Обрабатывает группы новостей, генерирует контент и сохраняет данные для модерации.
+    Для каждой группы отправляется статусное сообщение, которое после обработки удаляется,
+    а затем отправляется итоговый пост.
     """
-    # Если context.chat_data равен None, нельзя присваивать новые значения. Используем временный словарь.
-    if context.chat_data is None:
-        logger.warning("context.chat_data равен None. Использую временный словарь для хранения данных групп.")
-        chat_data = {}
-    else:
-        chat_data = context.chat_data  # Работает как обычный словарь
-    
+    # Инициализируем глобальное хранилище групп, если его ещё нет
+    if "news_groups" not in context.bot_data:
+        context.bot_data["news_groups"] = {}
+        
     group_ids = list(groups.keys())
     total_groups = len(group_ids)
     
-    # Определяем chat_id для отправки сообщений (обычно ADMIN_ID)
     chat_id = ADMIN_ID if send_loading_msg or update_obj is None else update_obj.effective_chat.id
     
     for i, group_id in enumerate(group_ids):
         remaining = total_groups - i
-
-        # Отправляем сообщение со статусом
         try:
             status_msg = context.bot.send_message(
                 chat_id=chat_id,
@@ -433,22 +419,20 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
 
         news_group = groups[group_id]
         try:
-            # Генерируем текст поста с помощью API редактора
             result = call_editor_api(news_group)
             if result is None:
                 context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
                 context.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось обработать новости группы {group_id}.")
                 continue
 
-            # Если результат одобрен, пытаемся сгенерировать изображение (если есть промт)
             post = result.get("post", {})
             illustration_prompt = post.get("illustration", "")
             image_url = None
             if illustration_prompt and result.get("resolution") == "approve":
                 image_url = generate_image(illustration_prompt)
 
-            # Сохраняем данные группы для дальнейшей работы
-            chat_data[f"group_{group_id}"] = {
+            # Сохраняем данные группы в глобальном хранилище
+            context.bot_data["news_groups"][f"group_{group_id}"] = {
                 "news_group": news_group,
                 "editor_result": result,
                 "image_url": image_url
@@ -474,7 +458,6 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                # Удаляем статусное сообщение и отправляем новое с итоговым контентом
                 context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
                 if image_url:
                     try:
@@ -529,9 +512,9 @@ def button_handler(update: Update, context: CallbackContext):
         logger.error(f"Неверный формат callback_data: {query.data}")
         return
 
-    group_data = context.chat_data.get(f"group_{group_id}")
+    # Ищем данные группы в глобальном хранилище bot_data
+    group_data = context.bot_data.get("news_groups", {}).get(f"group_{group_id}")
     if not group_data:
-        # Если сообщение содержит медиа (например, фото), используем edit_message_caption
         if query.message.photo:
             try:
                 query.edit_message_caption("Данные группы не найдены.")
@@ -579,18 +562,14 @@ def button_handler(update: Update, context: CallbackContext):
     elif action == "again":
         # Перегенерация текста
         try:
-            if query.message.photo:
-                # Если сообщение содержит медиа, удалим его и отправим новое сообщение
-                query.message.delete()
-            else:
-                query.edit_message_reply_markup(None)
-            regenerate_msg = context.bot.send_message(
+            # Не удаляем исходное сообщение, а отправляем уведомление о начале генерации
+            regeneration_msg = context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text="🔄 Генерирую новый вариант текста..."
             )
             result = call_editor_api(news_group)
             if result is None:
-                regenerate_msg.edit_text("❌ Ошибка при повторной генерации текста.")
+                regeneration_msg.edit_text("❌ Ошибка при повторной генерации текста.")
                 return
 
             group_data["editor_result"] = result
@@ -599,8 +578,6 @@ def button_handler(update: Update, context: CallbackContext):
             body = post.get("body", "")
             illustration_prompt = post.get("illustration", "")
             message_text = f"{title}\n\n{body}"
-
-            # Перегенерация изображения не обязательна для "другого текста", но можно обновить, если нужно
             new_image_url = generate_image(illustration_prompt)
             group_data["image_url"] = new_image_url
 
@@ -618,7 +595,7 @@ def button_handler(update: Update, context: CallbackContext):
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            regenerate_msg.delete()
+            regeneration_msg.delete()
             if new_image_url:
                 context.bot.send_photo(
                     chat_id=ADMIN_ID,
@@ -635,7 +612,7 @@ def button_handler(update: Update, context: CallbackContext):
         except Exception as e:
             logger.exception(f"Ошибка при регенерации текста: {e}")
             try:
-                regenerate_msg.edit_text(f"❌ Ошибка при регенерации текста: {str(e)}")
+                regeneration_msg.edit_text(f"❌ Ошибка при регенерации текста: {str(e)}")
             except Exception:
                 context.bot.send_message(
                     chat_id=ADMIN_ID,
@@ -645,7 +622,6 @@ def button_handler(update: Update, context: CallbackContext):
     elif action == "image":
         # Перегенерация изображения
         try:
-            # Если сообщение содержит медиа, используем edit_message_media, иначе – edit_message_text
             original_caption = query.message.caption if query.message.caption else ""
             context.bot.send_message(chat_id=ADMIN_ID, text="🔄 Генерирую новое изображение...")
             post = group_data["editor_result"].get("post", {})
