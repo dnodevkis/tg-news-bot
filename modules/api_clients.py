@@ -109,11 +109,14 @@ def generate_image(prompt):
 
     try:
         # Параметры модели DALL-E 3 могут меняться, проверяйте официальную документацию OpenAI
-        response = openai.Image.create(
-            prompt=prompt,
-            n=1,
-            size="1024x1024"  # Возможные варианты: "256x256", "512x512", "1024x1024"
-        )
+        response = openai.images.generate(
+             prompt=prompt,
+             model="dall-e-3",
+             n=1,
+             size="1024x1024",  # Возможные размеры: "256x256", "512x512", "1024x1024"
+             response_format="url",
+             quality="hd"
+         )
         image_url = response["data"][0]["url"]
         logger.debug("Сгенерированное изображение: %s", image_url)
         return image_url
