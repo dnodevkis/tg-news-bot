@@ -395,28 +395,25 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
     """
     Обрабатывает группы новостей, генерирует контент и подготавливает данные для модерации.
     Для каждой группы перед началом обработки отправляется сообщение "Генерирую, в очереди n постов",
-    которое затем редактируется с заменой на пост новости или сообщение об ошибке.
-    
+    которое после обработки удаляется, а затем отправляется новое сообщение с результатом (пост новости или сообщение об ошибке).
+
     Args:
         groups: Словарь групп новостей.
         context: CallbackContext Telegram.
-        send_loading_msg: Если True, отправка сообщений производится через update_obj.
+        send_loading_msg: Если True, сообщения отправляются через update_obj.
         update_obj: Объект Update, если вызывается ручная команда.
     """
-    # Гарантируем, что context.chat_data инициализирован
-    if not hasattr(context, 'chat_data') or context.chat_data is None:
-        context.chat_data = {}
-
+    # Не переопределяем context.chat_data, а используем его как есть
     group_ids = list(groups.keys())
     total_groups = len(group_ids)
     
-    # Определяем chat_id для сообщений (обычно ADMIN_ID)
+    # Определяем chat_id для отправки сообщений (обычно ADMIN_ID)
     chat_id = ADMIN_ID if send_loading_msg or update_obj is None else update_obj.effective_chat.id
     
     for i, group_id in enumerate(group_ids):
         remaining = total_groups - i
 
-        # Отправляем сообщение с информацией о количестве оставшихся групп
+        # Отправляем сообщение со статусом
         status_msg = context.bot.send_message(
             chat_id=chat_id,
             text=f"⏳ Генерирую контент, в очереди {remaining} постов..."
@@ -424,20 +421,19 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
         
         news_group = groups[group_id]
         try:
-            # Генерируем текст поста с помощью API редактора
             result = call_editor_api(news_group)
             if result is None:
-                status_msg.edit_text(f"❌ Не удалось обработать новости группы {group_id}.")
+                context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+                context.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось обработать новости группы {group_id}.")
                 continue
 
-            # Если результат одобрен, пытаемся сгенерировать изображение (если есть промт)
             post = result.get("post", {})
             illustration_prompt = post.get("illustration", "")
             image_url = None
             if illustration_prompt and result.get("resolution") == "approve":
                 image_url = generate_image(illustration_prompt)
-
-            # Сохраняем данные группы в context.chat_data для дальнейшей работы (например, для кнопок)
+            
+            # Сохраняем данные группы для дальнейшей работы (например, для кнопок)
             context.chat_data[f"group_{group_id}"] = {
                 "news_group": news_group,
                 "editor_result": result,
@@ -449,7 +445,6 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
                 body = post.get("body", "")
                 message_text = f"{title}\n\n{body}"
                 
-                # Создаем клавиатуру для дальнейших действий
                 keyboard = [
                     [
                         InlineKeyboardButton("🔄 Другой текст", callback_data=f"again:{group_id}"),
@@ -465,35 +460,45 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                # Редактируем отправленное сообщение: если есть изображение – редактируем медиа, иначе – текст
+                # Удаляем статусное сообщение и отправляем новое с итоговым контентом
+                context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
                 if image_url:
                     try:
-                        context.bot.edit_message_media(
-                            chat_id=chat_id,
-                            message_id=status_msg.message_id,
-                            media=InputMediaPhoto(media=image_url, caption=message_text),
-                            reply_markup=reply_markup
-                        )
-                    except Exception as e:
-                        logger.error(f"Ошибка редактирования медиа сообщения для группы {group_id}: {e}")
                         context.bot.send_photo(
                             chat_id=chat_id,
                             photo=image_url,
                             caption=message_text,
                             reply_markup=reply_markup
                         )
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки фото для группы {group_id}: {e}")
+                        context.bot.send_message(
+                            chat_id=chat_id,
+                            text=message_text,
+                            reply_markup=reply_markup
+                        )
                 else:
-                    status_msg.edit_text(text=message_text, reply_markup=reply_markup)
+                    context.bot.send_message(
+                        chat_id=chat_id,
+                        text=message_text,
+                        reply_markup=reply_markup
+                    )
             else:
-                # Если редактор отклонил новость – редактируем сообщение с указанием причины
                 reason = result.get("reason", "Нет объяснения")
-                status_msg.edit_text(
-                    f"Новости группы {group_id} отклонены редактором.\nПричина: {reason}"
+                context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+                context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"Новости группы {group_id} отклонены редактором.\nПричина: {reason}"
                 )
                 update_news_status_by_group(group_id, False)
+                
         except Exception as e:
             logger.error(f"Ошибка при обработке группы {group_id}: {e}")
-            status_msg.edit_text(f"❌ Ошибка при обработке группы {group_id}: {str(e)}")
+            context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+            context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ Ошибка при обработке группы {group_id}: {str(e)}"
+            )
 
 
 # --- Button callbacks ---
