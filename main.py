@@ -291,10 +291,17 @@ def select_time(update: Update, context: CallbackContext):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    query.edit_message_text(
-        f"Запланировать публикацию на {time_str}?",
-        reply_markup=reply_markup
-    )
+    if query.message.text:
+        query.edit_message_text(
+            f"Запланировать публикацию на {time_str}?",
+            reply_markup=reply_markup
+        )
+    elif query.message.caption:
+        query.edit_message_caption(
+            caption=f"Запланировать публикацию на {time_str}?",
+            reply_markup=reply_markup
+        )
+
     return SCHEDULE_CONFIRM
 
 def confirm_schedule(update: Update, context: CallbackContext):
