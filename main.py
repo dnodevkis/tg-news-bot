@@ -7,7 +7,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, JobQueue
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения
@@ -218,35 +218,49 @@ def generate_image(prompt):
         logger.error("Ошибка генерации изображения: %s", e)
         return None
 
-# --- Handlers бота ---
+# --- Общая функция обработки новостей ---
+def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool = False, update_obj: Update = None):
+    """
+    Обрабатывает группы новостей.
+    Если send_loading_msg=True, то используется update_obj для отправки/редактирования сообщения с состоянием загрузки.
+    """
+    # Если команда вызвана напрямую, показываем сообщение "проверяю..."
+    tmp_msg = None
+    if send_loading_msg and update_obj:
+        tmp_msg = update_obj.message.reply_text("проверяю...")
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("Привет! Используйте команду /checknews для проверки новостей из БД.")
-
-def check_news(update: Update, context: CallbackContext):
-    groups = get_unposted_news_groups()
-    # Если новостей нет, функция завершается без отправки сообщения
     if not groups:
+        if tmp_msg:
+            tmp_msg.edit_text("новостей нет")
         return
-    # Проходим по группам новостей (каждая группа – это набор до 3 новостей, объединённых по groupId)
+
+    # Подсчитываем общее число новостей в очереди
+    queue_count = sum(len(news_list) for news_list in groups.values())
+    if tmp_msg:
+        tmp_msg.edit_text(f"Генерирую, в очереди {queue_count} постов")
+
+    # Обрабатываем каждую группу новостей
     for group_id, news_group in groups.items():
         result = call_editor_api(news_group)
         if result is None:
-            update.message.reply_text(f"Не удалось обработать новости группы {group_id}.")
+            if send_loading_msg and update_obj:
+                update_obj.message.reply_text(f"Не удалось обработать новости группы {group_id}.")
+            else:
+                context.bot.send_message(chat_id=ADMIN_ID, text=f"Не удалось обработать новости группы {group_id}.")
             continue
-        
-        # Генерируем изображение до показа кнопок (если предусмотрено в ответе)
+
+        # Генерируем изображение, если предусмотрено в ответе
         post = result.get("post", {})
         illustration_prompt = post.get("illustration", "")
         image_url = generate_image(illustration_prompt)
-        
+
         # Сохраняем данные группы для дальнейшей обработки
         context.chat_data[f"group_{group_id}"] = {
             "news_group": news_group,
             "editor_result": result,
             "image_url": image_url
         }
-        
+
         if result.get("resolution") == "approve":
             title = post.get("title", "Без заголовка")
             body = post.get("body", "")
@@ -267,8 +281,27 @@ def check_news(update: Update, context: CallbackContext):
             else:
                 context.bot.send_message(chat_id=ADMIN_ID, text=message_text, reply_markup=reply_markup)
         else:
-            update.message.reply_text(f"Новости группы {group_id} отклонены редактором.")
+            if send_loading_msg and update_obj:
+                update_obj.message.reply_text(f"Новости группы {group_id} отклонены редактором.")
+            else:
+                context.bot.send_message(chat_id=ADMIN_ID, text=f"Новости группы {group_id} отклонены редактором.")
             update_news_status_by_group(group_id, False)
+
+# --- Handlers бота ---
+
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Привет! Используйте команду /checknews для проверки новостей из БД.")
+
+def check_news(update: Update, context: CallbackContext):
+    groups = get_unposted_news_groups()
+    process_news(groups, context, send_loading_msg=True, update_obj=update)
+
+def scheduled_check_news(context: CallbackContext):
+    groups = get_unposted_news_groups()
+    # Если новостей нет, просто ничего не делаем
+    if not groups:
+        return
+    process_news(groups, context, send_loading_msg=False)
 
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -379,6 +412,10 @@ def main():
     dp.add_handler(CommandHandler("checknews", check_news))
     dp.add_handler(CallbackQueryHandler(button_handler))
     
+    # Запускаем планировщик для проверки новостей каждые 10 минут
+    job_queue: JobQueue = updater.job_queue
+    job_queue.run_repeating(scheduled_check_news, interval=600, first=10)
+
     logger.info("Бот запущен и начинает опрос...")
     updater.start_polling()
     updater.idle()
