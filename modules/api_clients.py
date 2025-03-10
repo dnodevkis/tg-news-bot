@@ -117,7 +117,7 @@ def generate_image(prompt):
              response_format="url",
              quality="hd"
          )
-        image_url = response["data"][0]["url"]
+        image_url = response.data[0].url
         logger.debug("Сгенерированное изображение: %s", image_url)
         return image_url
     except Exception as e:
