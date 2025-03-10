@@ -240,19 +240,19 @@ def start_scheduling(update: Update, context: CallbackContext):
     suggested_times = []
     
     # Morning (9-11 AM)
-    morning = now.replace(hour=9, minute=0, second=0)
+    morning = now.replace(hour=9, minute=55, second=0)
     if morning < now:
         morning = morning + timedelta(days=1)
     suggested_times.append(morning)
     
     # Lunch (12-2 PM)
-    lunch = now.replace(hour=13, minute=0, second=0)
+    lunch = now.replace(hour=12, minute=55, second=0)
     if lunch < now:
         lunch = lunch + timedelta(days=1)
     suggested_times.append(lunch)
     
     # Evening (6-8 PM)
-    evening = now.replace(hour=19, minute=0, second=0)
+    evening = now.replace(hour=19, minute=55, second=0)
     if evening < now:
         evening = evening + timedelta(days=1)
     suggested_times.append(evening)
@@ -547,7 +547,11 @@ def button_handler(update: Update, context: CallbackContext):
                     text=message_text
                 )
             query.edit_message_reply_markup(None)
-            query.message.reply_text("✅ Пост опубликован!")
+            context.bot.send_message(
+    chat_id=query.message.chat_id,
+    text="✅ Пост опубликован!",
+    reply_to_message_id=query.message.message_id
+)
             logger.info(f"Группа {group_id} опубликована.")
         except Exception as e:
             logger.error(f"Ошибка при публикации поста: {e}")
@@ -556,7 +560,11 @@ def button_handler(update: Update, context: CallbackContext):
     elif action == "cancel":
         update_news_status_by_group(group_id, False)
         query.edit_message_reply_markup(None)
-        query.message.reply_text("❌ Пост отклонен.")
+        context.bot.send_message(
+    chat_id=query.message.chat_id,
+    text="❌ Пост отклонен.",
+    reply_to_message_id=query.message.message_id
+)
         logger.info(f"Группа {group_id} отклонена.")
 
     elif action == "again":
