@@ -520,81 +520,90 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
 
 # --- Button callbacks ---
 def button_handler(update: Update, context: CallbackContext):
-    """Handle button presses from inline keyboards."""
     query = update.callback_query
     query.answer()
-    
+
     try:
         action, group_id = query.data.split(":", 1)
     except Exception as e:
         logger.error(f"Неверный формат callback_data: {query.data}")
         return
-    
+
     group_data = context.chat_data.get(f"group_{group_id}")
     if not group_data:
-        query.edit_message_text("Данные группы не найдены.")
+        # Если сообщение содержит медиа (например, фото), используем edit_message_caption
+        if query.message.photo:
+            try:
+                query.edit_message_caption("Данные группы не найдены.")
+            except Exception as e:
+                logger.error(f"Ошибка редактирования подписи: {e}")
+        else:
+            query.edit_message_text("Данные группы не найдены.")
         return
-    
+
     news_group = group_data["news_group"]
-    
+
     if action == "approve":
-        # Publish immediately
         update_news_status_by_group(group_id, True)
         post = group_data["editor_result"].get("post", {})
         title = post.get("title", "Без заголовка")
         body = post.get("body", "")
         message_text = f"{title}\n\n{body}"
         image_url = group_data.get("image_url")
-        
+
         try:
             if image_url:
                 context.bot.send_photo(
-                    chat_id=CHANNEL_ID, 
-                    photo=image_url, 
+                    chat_id=CHANNEL_ID,
+                    photo=image_url,
                     caption=message_text
                 )
             else:
                 context.bot.send_message(
-                    chat_id=CHANNEL_ID, 
+                    chat_id=CHANNEL_ID,
                     text=message_text
                 )
-            
             query.edit_message_reply_markup(None)
             query.message.reply_text("✅ Пост опубликован!")
             logger.info(f"Группа {group_id} опубликована.")
         except Exception as e:
             logger.error(f"Ошибка при публикации поста: {e}")
             query.message.reply_text(f"❌ Ошибка при публикации: {str(e)}")
-    
+
     elif action == "cancel":
-        # Reject news
         update_news_status_by_group(group_id, False)
         query.edit_message_reply_markup(None)
         query.message.reply_text("❌ Пост отклонен.")
         logger.info(f"Группа {group_id} отклонена.")
-    
+
     elif action == "again":
-        # Regenerate text
-        query.edit_message_reply_markup(None)
-        regenerate_msg = query.message.reply_text("🔄 Генерирую новый вариант текста...")
-        
+        # Перегенерация текста
         try:
+            if query.message.photo:
+                # Если сообщение содержит медиа, удалим его и отправим новое сообщение
+                query.message.delete()
+            else:
+                query.edit_message_reply_markup(None)
+            regenerate_msg = context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="🔄 Генерирую новый вариант текста..."
+            )
             result = call_editor_api(news_group)
             if result is None:
                 regenerate_msg.edit_text("❌ Ошибка при повторной генерации текста.")
                 return
-            
+
             group_data["editor_result"] = result
             post = result.get("post", {})
             title = post.get("title", "Без заголовка")
             body = post.get("body", "")
             illustration_prompt = post.get("illustration", "")
             message_text = f"{title}\n\n{body}"
-            
-            # Generate new image for new text
+
+            # Перегенерация изображения не обязательна для "другого текста", но можно обновить, если нужно
             new_image_url = generate_image(illustration_prompt)
             group_data["image_url"] = new_image_url
-            
+
             keyboard = [
                 [
                     InlineKeyboardButton("🔄 Другой текст", callback_data=f"again:{group_id}"),
@@ -609,39 +618,42 @@ def button_handler(update: Update, context: CallbackContext):
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # Delete original message and send new one
             regenerate_msg.delete()
             if new_image_url:
                 context.bot.send_photo(
-                    chat_id=ADMIN_ID, 
-                    photo=new_image_url, 
-                    caption=message_text, 
+                    chat_id=ADMIN_ID,
+                    photo=new_image_url,
+                    caption=message_text,
                     reply_markup=reply_markup
                 )
             else:
                 context.bot.send_message(
-                    chat_id=ADMIN_ID, 
-                    text=message_text, 
+                    chat_id=ADMIN_ID,
+                    text=message_text,
                     reply_markup=reply_markup
                 )
-                
         except Exception as e:
-            logger.error(f"Ошибка при регенерации текста: {e}")
-            regenerate_msg.edit_text(f"❌ Ошибка при регенерации текста: {str(e)}")
-    
+            logger.exception(f"Ошибка при регенерации текста: {e}")
+            try:
+                regenerate_msg.edit_text(f"❌ Ошибка при регенерации текста: {str(e)}")
+            except Exception:
+                context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"❌ Ошибка при регенерации текста: {str(e)}"
+                )
+
     elif action == "image":
-        # Regenerate image only
-        query.message.reply_text("🔄 Генерирую новое изображение...")
-        
-        post = group_data["editor_result"].get("post", {})
-        illustration_prompt = post.get("illustration", "")
-        
+        # Перегенерация изображения
         try:
+            # Если сообщение содержит медиа, используем edit_message_media, иначе – edit_message_text
+            original_caption = query.message.caption if query.message.caption else ""
+            context.bot.send_message(chat_id=ADMIN_ID, text="🔄 Генерирую новое изображение...")
+            post = group_data["editor_result"].get("post", {})
+            illustration_prompt = post.get("illustration", "")
             new_image_url = generate_image(illustration_prompt)
             if new_image_url:
                 group_data["image_url"] = new_image_url
-                
+
                 keyboard = [
                     [
                         InlineKeyboardButton("🔄 Другой текст", callback_data=f"again:{group_id}"),
@@ -656,29 +668,34 @@ def button_handler(update: Update, context: CallbackContext):
                     ]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                try:
-                    context.bot.edit_message_media(
-                        chat_id=ADMIN_ID,
-                        message_id=query.message.message_id,
-                        media=InputMediaPhoto(media=new_image_url, caption=query.message.caption),
-                        reply_markup=reply_markup
-                    )
-                    context.bot.send_message(chat_id=ADMIN_ID, text="✅ Изображение обновлено.")
-                except Exception as e:
-                    logger.error(f"Ошибка редактирования медиа сообщения: {e}")
-                    context.bot.send_photo(
-                        chat_id=ADMIN_ID, 
-                        photo=new_image_url, 
-                        caption=query.message.caption, 
+                if query.message.photo:
+                    try:
+                        context.bot.edit_message_media(
+                            chat_id=ADMIN_ID,
+                            message_id=query.message.message_id,
+                            media=InputMediaPhoto(media=new_image_url, caption=original_caption),
+                            reply_markup=reply_markup
+                        )
+                        context.bot.send_message(chat_id=ADMIN_ID, text="✅ Изображение обновлено.")
+                    except Exception as e:
+                        logger.exception(f"Ошибка редактирования медиа сообщения для группы {group_id}: {e}")
+                        context.bot.send_photo(
+                            chat_id=ADMIN_ID,
+                            photo=new_image_url,
+                            caption=original_caption,
+                            reply_markup=reply_markup
+                        )
+                else:
+                    query.edit_message_text(
+                        text=original_caption,
                         reply_markup=reply_markup
                     )
             else:
                 context.bot.send_message(chat_id=ADMIN_ID, text="❌ Ошибка генерации изображения.")
         except Exception as e:
-            logger.error(f"Ошибка при генерации нового изображения: {e}")
+            logger.exception(f"Ошибка при генерации нового изображения для группы {group_id}: {e}")
             context.bot.send_message(
-                chat_id=ADMIN_ID, 
+                chat_id=ADMIN_ID,
                 text=f"❌ Ошибка при генерации нового изображения: {str(e)}"
             )
 
