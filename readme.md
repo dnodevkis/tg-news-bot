@@ -22,3 +22,5 @@
 BOT_TOKEN=ваш_токен
 CLAUDE_API_KEY=ваш_ключ_api_claude
 CLAUDE_MODEL=claude-2
+
+Расширил ридми
