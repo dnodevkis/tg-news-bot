@@ -47,33 +47,56 @@ def get_db_pool():
 def get_unposted_news_groups():
     """
     Извлекает все записи из таблицы fetched_events, где isPosted IS NULL.
+    Исключает новости, которые уже были обработаны (isPosted = FALSE).
     Группирует их по groupId, сортирует по eventDate и оставляет последние 3 записи для каждой группы.
     Возвращает словарь вида: { groupId: [news, ...] }
     """
     groups = {}
     query = """
-        SELECT event_id, "groupId", "eventDate", report, "isPosted"
+        SELECT DISTINCT ON ("groupId") "groupId"
           FROM fetched_events
          WHERE "isPosted" IS NULL
-         ORDER BY "eventDate" ASC;
+         ORDER BY "groupId";
     """
     try:
         pool = get_db_pool()
         with pool.getconn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Сначала получаем список уникальных groupId, где есть записи с isPosted IS NULL
                 cur.execute(query)
-                rows = cur.fetchall()
-        pool.putconn(conn)
-
-        for row in rows:
-            group_id = row["groupId"]
-            groups.setdefault(group_id, []).append(row)
-
-        # Для каждой группы оставляем последние 3, сортируем по eventDate
-        for group_id, news_list in groups.items():
-            news_list.sort(key=lambda r: r.get("eventDate", ""))
-            groups[group_id] = news_list[-3:]
+                group_ids = [row["groupId"] for row in cur.fetchall()]
+                
+                # Проверяем, есть ли у каждой группы записи с isPosted = FALSE
+                # Если есть, значит группа уже обрабатывалась и ожидает резолюции
+                filtered_group_ids = []
+                for group_id in group_ids:
+                    cur.execute("""
+                        SELECT COUNT(*) as count
+                          FROM fetched_events
+                         WHERE "groupId" = %s AND "isPosted" = FALSE
+                    """, (group_id,))
+                    count = cur.fetchone()["count"]
+                    if count == 0:  # Если нет записей с isPosted = FALSE, добавляем группу
+                        filtered_group_ids.append(group_id)
+                
+                # Для каждой отфильтрованной группы получаем записи
+                for group_id in filtered_group_ids:
+                    cur.execute("""
+                        SELECT event_id, "groupId", "eventDate", report, "isPosted"
+                          FROM fetched_events
+                         WHERE "groupId" = %s AND "isPosted" IS NULL
+                         ORDER BY "eventDate" ASC
+                    """, (group_id,))
+                    news_list = cur.fetchall()
+                    # Оставляем последние 3 записи
+                    news_list.sort(key=lambda r: r.get("eventDate", ""))
+                    groups[group_id] = news_list[-3:]
+                    
+                    # Отмечаем новости как обработанные (isPosted = False)
+                    # Это предотвратит повторную обработку новостей, которые уже были отправлены в Telegram
+                    mark_news_as_processed(group_id)
         
+        pool.putconn(conn)
         logger.debug("Группировка новостей завершена: %s", groups)
         return groups
 
@@ -81,16 +104,39 @@ def get_unposted_news_groups():
         logger.error("Ошибка получения новостей из БД: %s", e)
         return {}
 
+def mark_news_as_processed(group_id):
+    """
+    Отмечает новости группы как обработанные, устанавливая поле isPosted в False.
+    Это предотвращает повторную обработку новостей, которые уже были отправлены в Telegram,
+    но еще не получили окончательную резолюцию (Опубликовать).
+    """
+    query = """
+        UPDATE fetched_events
+           SET "isPosted" = FALSE
+         WHERE "groupId" = %s
+           AND "isPosted" IS NULL;
+    """
+    try:
+        pool = get_db_pool()
+        with pool.getconn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (group_id,))
+            conn.commit()
+        pool.putconn(conn)
+        logger.info("Новости группы %s отмечены как обработанные.", group_id)
+    except Exception as e:
+        logger.error("Ошибка при отметке новостей группы %s как обработанных: %s", group_id, e)
+
 def update_news_status_by_group(group_id, status):
     """
-    Обновляет поле isPosted для всех записей с заданным group_id, где isPosted IS NULL.
-    status: True (опубликовать) или False (отклонить)
+    Обновляет поле isPosted для всех записей с заданным group_id.
+    status: True (опубликовать) или False (уже отмечено как обработанное)
     """
     query = """
         UPDATE fetched_events
            SET "isPosted" = %s
          WHERE "groupId" = %s
-           AND "isPosted" IS NULL;
+           AND ("isPosted" IS NULL OR "isPosted" = FALSE);
     """
     try:
         pool = get_db_pool()
