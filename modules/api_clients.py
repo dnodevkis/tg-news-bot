@@ -83,9 +83,108 @@ def call_editor_api(news_group):
         logger.debug("Очищенный ответ для парсинга:\n%s", cleaned_reply)
 
         try:
-            result = json.loads(cleaned_reply)
-            logger.debug("Распарсенный результат:\n%s", json.dumps(result, indent=2, ensure_ascii=False))
-            return result
+            # Попытка исправить распространенные ошибки в JSON
+            # 1. Замена одинарных кавычек на двойные
+            cleaned_reply = cleaned_reply.replace("'", "\"")
+            
+            # 2. Исправление незакрытых кавычек в конце строк
+            lines = cleaned_reply.split("\n")
+            for i in range(len(lines)):
+                line = lines[i].rstrip()
+                # Проверяем, что строка заканчивается на текст без закрывающей кавычки
+                if (line.endswith(",") or line.endswith("{") or line.endswith("[") or 
+                    line.endswith(":") or line.endswith("}")):
+                    continue
+                
+                # Если строка содержит двоеточие и не заканчивается кавычкой или запятой
+                if ":" in line and not (line.endswith("\"") or line.endswith(",") or 
+                                        line.endswith("}") or line.endswith("]")):
+                    # Добавляем закрывающую кавычку
+                    lines[i] = line + "\""
+                
+                # Если строка начинается с кавычки, но не заканчивается кавычкой или запятой
+                if line.lstrip().startswith("\"") and not (line.endswith("\"") or line.endswith(",")):
+                    lines[i] = line + "\""
+            
+            cleaned_reply = "\n".join(lines)
+            
+            # 3. Попытка исправить отсутствующие запятые между элементами
+            cleaned_reply = cleaned_reply.replace("}\n{", "},\n{")
+            cleaned_reply = cleaned_reply.replace("]\n[", "],\n[")
+            cleaned_reply = cleaned_reply.replace("}\n\"", "},\n\"")
+            cleaned_reply = cleaned_reply.replace("]\n\"", "],\n\"")
+            
+            # Попытка парсинга JSON
+            try:
+                result = json.loads(cleaned_reply)
+                logger.debug("Распарсенный результат:\n%s", json.dumps(result, indent=2, ensure_ascii=False))
+                return result
+            except json.JSONDecodeError as json_err:
+                # Если не удалось, попробуем более агрессивное исправление
+                logger.warning("Первая попытка парсинга не удалась: %s. Пробуем более агрессивное исправление.", json_err)
+                
+                # Используем регулярные выражения для более сложного исправления
+                import re
+                
+                # Исправляем проблемы с запятыми в конце объектов
+                cleaned_reply = re.sub(r'",\s*}', '"}', cleaned_reply)
+                cleaned_reply = re.sub(r'",\s*]', '"]', cleaned_reply)
+                
+                # Исправляем проблемы с отсутствующими запятыми между свойствами
+                cleaned_reply = re.sub(r'"\s*\n\s*"', '",\n"', cleaned_reply)
+                
+                # Попытка ручного исправления JSON на основе ошибки
+                if "Expecting ',' delimiter" in str(json_err):
+                    # Находим позицию ошибки
+                    match = re.search(r'line (\d+) column (\d+)', str(json_err))
+                    if match:
+                        line_num = int(match.group(1))
+                        col_num = int(match.group(2))
+                        
+                        # Разбиваем на строки
+                        lines = cleaned_reply.split('\n')
+                        if 1 <= line_num <= len(lines):
+                            # Вставляем запятую в проблемное место
+                            line = lines[line_num - 1]
+                            if col_num <= len(line):
+                                lines[line_num - 1] = line[:col_num] + ',' + line[col_num:]
+                                cleaned_reply = '\n'.join(lines)
+                
+                try:
+                    result = json.loads(cleaned_reply)
+                    logger.debug("Распарсенный результат после исправления:\n%s", 
+                                json.dumps(result, indent=2, ensure_ascii=False))
+                    return result
+                except Exception as e:
+                    logger.error("Ошибка парсинга ответа редактора после исправления: %s", e)
+                    logger.error("Сырой ответ после очистки: %s", cleaned_reply)
+                    
+                    # Если все попытки не удались, попробуем извлечь данные вручную
+                    try:
+                        # Извлекаем основные поля из текста
+                        resolution_match = re.search(r'"resolution":\s*"([^"]+)"', cleaned_reply)
+                        title_match = re.search(r'"title":\s*"([^"]+)"', cleaned_reply)
+                        body_match = re.search(r'"body":\s*"([^"]+)"', cleaned_reply)
+                        illustration_match = re.search(r'"illustration":\s*"([^"]+)"', cleaned_reply)
+                        
+                        if resolution_match and title_match and body_match:
+                            manual_result = {
+                                "resolution": resolution_match.group(1),
+                                "post": {
+                                    "title": title_match.group(1),
+                                    "body": body_match.group(1)
+                                }
+                            }
+                            
+                            if illustration_match:
+                                manual_result["post"]["illustration"] = illustration_match.group(1)
+                                
+                            logger.info("Удалось извлечь данные вручную после ошибки парсинга")
+                            return manual_result
+                    except Exception as manual_err:
+                        logger.error("Не удалось извлечь данные вручную: %s", manual_err)
+                    
+                    return None
         except Exception as e:
             logger.error("Ошибка парсинга ответа редактора: %s", e)
             logger.error("Сырой ответ после очистки: %s", cleaned_reply)
