@@ -47,54 +47,57 @@ def get_db_pool():
 def get_unposted_news_groups():
     """
     Извлекает все записи из таблицы fetched_events, где isPosted IS NULL.
-    Исключает новости, которые уже были обработаны (isPosted = FALSE).
     Группирует их по groupId, сортирует по eventDate и оставляет последние 3 записи для каждой группы.
     Возвращает словарь вида: { groupId: [news, ...] }
     """
     groups = {}
-    query = """
-        SELECT DISTINCT ON ("groupId") "groupId"
-          FROM fetched_events
-         WHERE "isPosted" IS NULL
-         ORDER BY "groupId";
+    
+    # Выводим все записи с isPosted IS NULL для отладки
+    debug_query = """
+        SELECT "eventDate", "isPosted"
+        FROM fetched_events
+        ORDER BY "eventDate" DESC
+        LIMIT 10;
     """
+    
     try:
         pool = get_db_pool()
         with pool.getconn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Сначала получаем список уникальных groupId, где есть записи с isPosted IS NULL
-                cur.execute(query)
-                group_ids = [row["groupId"] for row in cur.fetchall()]
+                # Отладочный вывод
+                cur.execute(debug_query)
+                debug_rows = cur.fetchall()
+                logger.info("Последние 10 записей в таблице:")
+                for row in debug_rows:
+                    logger.info(f"eventDate: {row['eventDate']}, isPosted: {row['isPosted']}")
                 
-                # Проверяем, есть ли у каждой группы записи с isPosted = FALSE
-                # Если есть, значит группа уже обрабатывалась и ожидает резолюции
-                filtered_group_ids = []
-                for group_id in group_ids:
-                    cur.execute("""
-                        SELECT COUNT(*) as count
-                          FROM fetched_events
-                         WHERE "groupId" = %s AND "isPosted" = FALSE
-                    """, (group_id,))
-                    count = cur.fetchone()["count"]
-                    if count == 0:  # Если нет записей с isPosted = FALSE, добавляем группу
-                        filtered_group_ids.append(group_id)
+                # Получаем все записи с isPosted IS NULL
+                cur.execute("""
+                    SELECT "groupId", COUNT(*) as count
+                    FROM fetched_events
+                    WHERE "isPosted" IS NULL
+                    GROUP BY "groupId";
+                """)
+                group_counts = cur.fetchall()
+                logger.info(f"Найдено групп с isPosted IS NULL: {len(group_counts)}")
                 
-                # Для каждой отфильтрованной группы получаем записи
-                for group_id in filtered_group_ids:
+                # Для каждой группы получаем записи
+                for group_info in group_counts:
+                    group_id = group_info["groupId"]
+                    logger.info(f"Обрабатываем группу {group_id} с {group_info['count']} записями")
+                    
                     cur.execute("""
                         SELECT event_id, "groupId", "eventDate", report, "isPosted"
-                          FROM fetched_events
-                         WHERE "groupId" = %s AND "isPosted" IS NULL
-                         ORDER BY "eventDate" ASC
+                        FROM fetched_events
+                        WHERE "groupId" = %s AND "isPosted" IS NULL
+                        ORDER BY "eventDate" DESC
+                        LIMIT 3;
                     """, (group_id,))
                     news_list = cur.fetchall()
-                    # Оставляем последние 3 записи
-                    news_list.sort(key=lambda r: r.get("eventDate", ""))
-                    groups[group_id] = news_list[-3:]
                     
-                    # Не отмечаем новости как обработанные здесь
-                    # Это будет сделано после фактической обработки в main.py
-                    # mark_news_as_processed(group_id)
+                    if news_list:
+                        groups[group_id] = news_list
+                        logger.info(f"Добавлена группа {group_id} с {len(news_list)} записями")
         
         pool.putconn(conn)
         logger.debug("Группировка новостей завершена: %s", groups)

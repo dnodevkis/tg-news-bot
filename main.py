@@ -767,10 +767,10 @@ def main():
     # Setup job queue
     job_queue = updater.job_queue
     
-    # Schedule news check every 10 minutes
+    # Schedule news check every 1 minute
     job_queue.run_repeating(
         scheduled_check_news, 
-        interval=600,  # 10 minutes
+        interval=60,  # 1 minute
         first=10  # Wait 10 seconds before first check
     )
     
