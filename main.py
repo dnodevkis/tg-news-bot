@@ -39,7 +39,8 @@ from dotenv import load_dotenv
 from modules.database import (
     get_db_pool, get_unposted_news_groups, 
     update_news_status_by_group, schedule_post,
-    get_scheduled_posts, update_post_status
+    get_scheduled_posts, update_post_status,
+    mark_news_as_processed
 )
 from modules.api_clients import (
     call_editor_api, generate_image
@@ -420,6 +421,7 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
     Обрабатывает группы новостей, генерирует контент и сохраняет данные для модерации.
     Для каждой группы отправляется статусное сообщение, которое после обработки удаляется,
     а затем отправляется итоговый пост.
+    После обработки каждой группы, записи отмечаются как обработанные (isPosted = FALSE).
     """
     # Инициализируем глобальное хранилище групп, если его ещё нет
     if "news_groups" not in context.bot_data:
@@ -461,6 +463,10 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
                 "editor_result": result,
                 "image_url": image_url
             }
+            
+            # Отмечаем новости как обработанные (isPosted = False)
+            # Это предотвратит повторную обработку новостей при следующем запуске
+            mark_news_as_processed(group_id)
             
             if result.get("resolution") == "approve":
                 title = post.get("title", "Без заголовка")

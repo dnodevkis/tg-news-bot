@@ -92,9 +92,9 @@ def get_unposted_news_groups():
                     news_list.sort(key=lambda r: r.get("eventDate", ""))
                     groups[group_id] = news_list[-3:]
                     
-                    # Отмечаем новости как обработанные (isPosted = False)
-                    # Это предотвратит повторную обработку новостей, которые уже были отправлены в Telegram
-                    mark_news_as_processed(group_id)
+                    # Не отмечаем новости как обработанные здесь
+                    # Это будет сделано после фактической обработки в main.py
+                    # mark_news_as_processed(group_id)
         
         pool.putconn(conn)
         logger.debug("Группировка новостей завершена: %s", groups)
