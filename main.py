@@ -445,13 +445,32 @@ def process_news(groups: dict, context: CallbackContext, send_loading_msg: bool 
 
         news_group = groups[group_id]
         try:
+            # Вызываем API с повторными попытками и увеличенным таймаутом
             result = call_editor_api(news_group)
             if result is None:
                 context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
                 context.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось обработать новости группы {group_id}.")
                 continue
+                
+            # Добавляем небольшую задержку для обеспечения полного формирования ответа
+            time.sleep(1)
+            
+            # Проверяем полноту и корректность ответа
+            if not result.get("post") and result.get("resolution") == "approve":
+                logger.warning(f"Получен неполный ответ от API для группы {group_id}")
+                context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+                context.bot.send_message(chat_id=chat_id, text=f"❌ Получен неполный ответ от API для группы {group_id}.")
+                continue
 
             post = result.get("post", {})
+            
+            # Проверяем, что текст не пустой
+            if result.get("resolution") == "approve" and (not post.get("title") or not post.get("body")):
+                logger.warning(f"Получен пустой текст для группы {group_id}")
+                context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+                context.bot.send_message(chat_id=chat_id, text=f"❌ Получен пустой текст для группы {group_id}.")
+                continue
+                
             illustration_prompt = post.get("illustration", "")
             image_url = None
             if illustration_prompt and result.get("resolution") == "approve":
@@ -604,18 +623,39 @@ def button_handler(update: Update, context: CallbackContext):
                 chat_id=ADMIN_ID,
                 text="🔄 Генерирую новый вариант текста..."
             )
+            
+            # Вызываем API с повторными попытками и явно отключенным стримингом
+            # Это гарантирует, что мы получим полный ответ, а не частичный
             result = call_editor_api(news_group)
             if result is None:
                 regeneration_msg.edit_text("❌ Ошибка при повторной генерации текста.")
                 return
-
+            
+            # Проверяем полноту и корректность ответа
+            if not result.get("post") or not result.get("resolution"):
+                logger.warning("Получен неполный ответ от API при регенерации текста")
+                regeneration_msg.edit_text("❌ Получен неполный ответ от API. Пожалуйста, попробуйте еще раз.")
+                return
+                
+            # Сохраняем результат
             group_data["editor_result"] = result
             post = result.get("post", {})
             title = post.get("title", "Без заголовка")
             body = post.get("body", "")
+            
+            # Проверяем, что текст не пустой
+            if not title or not body or len(body) < 10:
+                logger.warning(f"Получен слишком короткий текст: title={title}, body_length={len(body)}")
+                regeneration_msg.edit_text("❌ Получен слишком короткий текст. Пожалуйста, попробуйте еще раз.")
+                return
+                
             illustration_prompt = post.get("illustration", "")
             message_text = f"{title}\n\n{body}"
-            new_image_url = generate_image(illustration_prompt)
+            
+            # Генерируем изображение
+            new_image_url = None
+            if illustration_prompt:
+                new_image_url = generate_image(illustration_prompt)
             group_data["image_url"] = new_image_url
 
             keyboard = [

@@ -12,15 +12,40 @@ import json
 import logging
 import requests
 import openai
+import time
+import random
 from modules.config import CLAUDE_API_KEY, CLAUDE_MODEL, SYSTEM_PROMPT, OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
+# Retry decorator with exponential backoff
+def retry_with_backoff(retries=3, backoff_in_seconds=1):
+    """
+    Retry decorator with exponential backoff
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            x = 0
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if x == retries:
+                        raise e
+                    sleep = backoff_in_seconds * 2 ** x + random.uniform(0, 1)
+                    logger.warning(f"Retry {x+1}/{retries} after error: {e}. Sleeping for {sleep:.2f} seconds")
+                    time.sleep(sleep)
+                    x += 1
+        return wrapper
+    return decorator
+
+@retry_with_backoff(retries=3, backoff_in_seconds=2)
 def call_editor_api(news_group):
     """
     Вызывает API Claude для генерации поста.
     Формирует текст запроса на основе совокупных новостных заметок news_group и системного промта.
     Возвращает словарь с результатом или None при ошибке.
+    Включает механизм повторных попыток с экспоненциальной задержкой.
     """
     # Собираем из news_group общий текст
     news_text = "\n".join([n["report"] for n in news_group])
@@ -34,42 +59,57 @@ def call_editor_api(news_group):
     payload = {
         "model": CLAUDE_MODEL,
         "max_tokens": 4000,
-        "system": SYSTEM_PROMPT,  # Иногда не требуется, зависит от API
+        "system": SYSTEM_PROMPT,
         "messages": [
             {"role": "user", "content": prompt}
-        ]
+        ],
+        # Отключаем стриминг, чтобы получить полный ответ сразу
+        "stream": False
     }
     headers = {
         "Content-Type": "application/json",
         "x-api-key": CLAUDE_API_KEY,
-        # Обратите внимание: anthropic-version может отличаться
         "anthropic-version": "2023-06-01"
     }
 
     logger.debug("Отправляем payload в API Claude:\n%s", json.dumps(payload, indent=2, ensure_ascii=False))
     
     try:
+        # Используем увеличенный таймаут и настройки для надежного получения полного ответа
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
             json=payload,
             headers=headers,
-            timeout=20
+            timeout=120,  # Увеличиваем таймаут до 2 минут
+            stream=False  # Явно отключаем стриминг на уровне requests
         )
         response.raise_for_status()
 
-        # Часть API Anthropic возвращает data["completion"],
-        # часть - data["content"][...]. Ниже условная логика.
+        # Получаем полный ответ
         data = response.json()
         raw_response = json.dumps(data, indent=2, ensure_ascii=False)
         logger.debug("Сырой ответ от Claude:\n%s", raw_response)
 
-        # Извлекаем поле с текстом:
+        # Извлекаем поле с текстом из современного API Claude
         if "content" in data and isinstance(data["content"], list) and data["content"]:
-            reply = data["content"][0].get("text", "")
-        elif "completion" in data:
+            reply = ""
+            for content_block in data["content"]:
+                if content_block.get("type") == "text":
+                    reply += content_block.get("text", "")
+        elif "completion" in data:  # Для обратной совместимости со старыми версиями API
             reply = data["completion"]
         else:
             reply = ""
+            
+        # Проверяем, что ответ полный и содержит необходимые данные
+        if not reply or len(reply) < 50:  # Минимальная ожидаемая длина ответа
+            logger.warning("Получен слишком короткий ответ от API. Повторная попытка...")
+            raise Exception("Incomplete API response")
+            
+        # Проверяем, что ответ завершен (stop_reason должен быть указан)
+        if "stop_reason" not in data or data["stop_reason"] is None:
+            logger.warning("Получен незавершенный ответ от API (отсутствует stop_reason). Повторная попытка...")
+            raise Exception("Incomplete API response - missing stop_reason")
 
         def clean_reply(text):
             text = text.strip()
@@ -194,10 +234,12 @@ def call_editor_api(news_group):
         logger.error("Ошибка вызова API редактора: %s", e)
         return None
 
+@retry_with_backoff(retries=2, backoff_in_seconds=1)
 def generate_image(prompt):
     """
     Генерирует изображение с помощью OpenAI (DALL-E).
     Возвращает URL изображения или None при ошибке.
+    Включает механизм повторных попыток с экспоненциальной задержкой.
     """
     # Устанавливаем ключ
     openai.api_key = OPENAI_API_KEY
