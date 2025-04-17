@@ -57,7 +57,7 @@ def get_unposted_news_groups():
         SELECT "eventDate", "isPosted"
         FROM fetched_events
         ORDER BY "eventDate" DESC
-        LIMIT 10;
+        LIMIT 30;
     """
     
     try:
@@ -67,7 +67,7 @@ def get_unposted_news_groups():
                 # Отладочный вывод
                 cur.execute(debug_query)
                 debug_rows = cur.fetchall()
-                logger.info("Последние 10 записей в таблице:")
+                logger.info("Последние 30 записей в таблице:")
                 for row in debug_rows:
                     logger.info(f"eventDate: {row['eventDate']}, isPosted: {row['isPosted']}")
                 
