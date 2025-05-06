@@ -117,7 +117,27 @@ def call_editor_api(news_group):
                 text = text[len("```json"):].strip()
             if text.endswith("```"):
                 text = text[:-3].strip()
-            return text
+            
+            # Проверяем, является ли текст валидным JSON
+            try:
+                json.loads(text)
+                return text
+            except json.JSONDecodeError:
+                # Если не является, пробуем исправить проблемы с кавычками
+                # Заменяем неэкранированные внутренние кавычки на экранированные
+                import re
+                # Находим строки в JSON и правильно экранируем кавычки внутри них
+                pattern = r'"([^"\\]*(?:\\.[^"\\]*)*)"'
+                
+                def fix_inner_quotes(match):
+                    content = match.group(1)
+                    # Заменяем неэкранированные кавычки на экранированные
+                    fixed = re.sub(r'(?<!\\)"', r'\\"', content)
+                    return f'"{fixed}"'
+                
+                fixed_text = re.sub(pattern, fix_inner_quotes, text)
+                logger.debug("Текст после исправления кавычек: %s", fixed_text)
+                return fixed_text
 
         cleaned_reply = clean_reply(reply)
         logger.debug("Очищенный ответ для парсинга:\n%s", cleaned_reply)
