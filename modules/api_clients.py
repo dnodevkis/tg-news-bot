@@ -219,32 +219,103 @@ def call_editor_api(news_group):
                     logger.error("Ошибка парсинга ответа редактора после исправления: %s", e)
                     logger.error("Сырой ответ после очистки: %s", cleaned_reply)
                     
-                    # Если все попытки не удались, попробуем извлечь данные вручную
-                    try:
-                        # Извлекаем основные поля из текста
-                        resolution_match = re.search(r'"resolution":\s*"([^"]+)"', cleaned_reply)
-                        title_match = re.search(r'"title":\s*"([^"]+)"', cleaned_reply)
-                        body_match = re.search(r'"body":\s*"([^"]+)"', cleaned_reply)
-                        illustration_match = re.search(r'"illustration":\s*"([^"]+)"', cleaned_reply)
+                # Если все попытки не удались, попробуем более глубокое исправление проблем с запятыми в строках
+                try:
+                    # Находим все строки в JSON и экранируем специальные символы внутри них
+                    def escape_special_chars_in_strings(json_str):
+                        # Состояние парсера
+                        in_string = False
+                        escape_next = False
+                        result = []
                         
-                        if resolution_match and title_match and body_match:
-                            manual_result = {
-                                "resolution": resolution_match.group(1),
-                                "post": {
-                                    "title": title_match.group(1),
-                                    "body": body_match.group(1)
-                                }
-                            }
+                        # Словарь специальных символов и их временных маркеров
+                        special_chars = {
+                            ',': '###COMMA###',
+                            ':': '###COLON###',
+                            '{': '###LCURLY###',
+                            '}': '###RCURLY###',
+                            '[': '###LBRACKET###',
+                            ']': '###RBRACKET###'
+                        }
+                        
+                        for char in json_str:
+                            if escape_next:
+                                escape_next = False
+                            elif char == '\\':
+                                escape_next = True
+                            elif char == '"':
+                                in_string = not in_string
+                            elif char in special_chars and in_string:
+                                # Заменяем специальный символ внутри строки на временный маркер
+                                char = special_chars[char]
                             
-                            if illustration_match:
-                                manual_result["post"]["illustration"] = illustration_match.group(1)
-                                
-                            logger.info("Удалось извлечь данные вручную после ошибки парсинга")
-                            return manual_result
-                    except Exception as manual_err:
-                        logger.error("Не удалось извлечь данные вручную: %s", manual_err)
+                            result.append(char)
+                        
+                        return ''.join(result)
                     
-                    return None
+                    # Функция для восстановления специальных символов после парсинга
+                    def restore_special_chars(json_str):
+                        replacements = {
+                            '###COMMA###': ',',
+                            '###COLON###': ':',
+                            '###LCURLY###': '{',
+                            '###RCURLY###': '}',
+                            '###LBRACKET###': '[',
+                            '###RBRACKET###': ']'
+                        }
+                        
+                        for marker, char in replacements.items():
+                            json_str = json_str.replace(marker, char)
+                        
+                        return json_str
+                    
+                    # Применяем экранирование специальных символов
+                    temp_json = escape_special_chars_in_strings(cleaned_reply)
+                    
+                    # Пытаемся парсить JSON с экранированными специальными символами
+                    try:
+                        # Заменяем маркеры обратно на специальные символы после парсинга
+                        result = json.loads(restore_special_chars(temp_json))
+                        logger.info("Успешный парсинг после экранирования специальных символов в строках")
+                        return result
+                    except json.JSONDecodeError:
+                        logger.warning("Парсинг с экранированием специальных символов не удался, пробуем ручное извлечение")
+                except Exception as e:
+                    logger.error("Ошибка при экранировании специальных символов: %s", e)
+                
+                # Если все попытки не удались, попробуем извлечь данные вручную с улучшенным регулярным выражением
+                try:
+                    # Извлекаем основные поля из текста с учетом возможных запятых и других спецсимволов в строках
+                    resolution_match = re.search(r'"resolution":\s*"([^"\\]*(?:\\.[^"\\]*)*)"', cleaned_reply)
+                    
+                    # Для title, body и illustration используем более сложные регулярные выражения,
+                    # которые могут захватить строки с запятыми и другими спецсимволами
+                    title_pattern = r'"title":\s*"((?:[^"\\]|\\.)*)(?<!\\)"'
+                    body_pattern = r'"body":\s*"((?:[^"\\]|\\.)*)(?<!\\)"'
+                    illustration_pattern = r'"illustration":\s*"((?:[^"\\]|\\.)*)(?<!\\)"'
+                    
+                    title_match = re.search(title_pattern, cleaned_reply, re.DOTALL)
+                    body_match = re.search(body_pattern, cleaned_reply, re.DOTALL)
+                    illustration_match = re.search(illustration_pattern, cleaned_reply, re.DOTALL)
+                    
+                    if resolution_match and title_match and body_match:
+                        manual_result = {
+                            "resolution": resolution_match.group(1),
+                            "post": {
+                                "title": title_match.group(1),
+                                "body": body_match.group(1)
+                            }
+                        }
+                        
+                        if illustration_match:
+                            manual_result["post"]["illustration"] = illustration_match.group(1)
+                            
+                        logger.info("Удалось извлечь данные вручную после ошибки парсинга")
+                        return manual_result
+                except Exception as manual_err:
+                    logger.error("Не удалось извлечь данные вручную: %s", manual_err)
+                
+                return None
         except Exception as e:
             logger.error("Ошибка парсинга ответа редактора: %s", e)
             logger.error("Сырой ответ после очистки: %s", cleaned_reply)
