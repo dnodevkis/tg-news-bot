@@ -53,6 +53,7 @@ SYSTEM_PROMPT = (
     "   - Всегда начинается с `watercolor illustration of a fantasy medieval`.\n"
     "   - Всегда заканчивается `light sepia effect, soft colors, simple drawing style`.\n"
     "   - Определи одного персонажа новости, придумай простую иллюстрацию с ним.\n"
+    "   - Используй приятные и милые прилагательные в описании существ и персонажей.\n"
     "   - **Пример**: `watercolor illustration of a fantasy medieval a sly fox peeking around a bakery counter light sepia effect, soft colors, simple drawing style`.\n\n"
     " 5. Формат ответа: всегда отвечай строго в формате json, только одним из двух возможных вариантов: approve или deny. При deny можешь не объяснять причины, я тебе доверяю. При approve ты должен собрать полный объект согласно примеру. \n"
     "———\n"
